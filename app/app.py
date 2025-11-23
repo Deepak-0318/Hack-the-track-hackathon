@@ -126,22 +126,19 @@ car_laps = car_laps[
 ].sort_values("lap_number")
 
 valid_laps = sorted(car_laps["lap_number"].unique())
-if not valid_laps:
-    st.error("No valid race laps found for this car after cleaning.")
-    st.stop()
-
-lap = st.select_slider("Select Lap", options=valid_laps, value=valid_laps[0])
+lap = st.select_slider("Select Lap", options=valid_laps)
 
 row = car_laps[car_laps["lap_number"] == lap].iloc[0]
 max_laps = real_lap_cap
 
-# 🔧 FIX — Ensure these exist before they're used anywhere
+# 🔧 race-state variables used in multiple sections
 median_pace = float(row["median_pace"])
 gap_to_front = float(row["gap_to_front_s"])
 gap_to_leader = float(row["gap_to_leader_s"])
 pit_flag = bool(row["pit_like"])
 
 st.markdown('</div>', unsafe_allow_html=True)
+
 # ------------------------------------------------------------------
 # Current race context
 # ------------------------------------------------------------------
@@ -164,7 +161,7 @@ try:
         gap_leader=float(row["gap_to_leader_s"]),
     )
     predicted_text = f"P{pred_pos}"
-except:
+except Exception:
     pass
 
 c5.metric("Predicted Finish", predicted_text)
@@ -172,12 +169,25 @@ st.markdown('</div>', unsafe_allow_html=True)
 st.markdown("---")
 
 # ------------------------------------------------------------------
-# Strategy recommendation
+# 🔥 Smart AI Strategy Recommendation (uses official pit-lane time)
 # ------------------------------------------------------------------
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.subheader("🔥 Smart AI Strategy Recommendation")
 
-pit_loss = st.slider("Assumed Pit Time Loss (seconds)", 20, 60, 30, step=2)
+# Official Road America pit-lane transit is ~52s, so we default to that
+pit_loss = st.slider(
+    "Assumed Pit Time Loss (seconds)",
+    min_value=30,
+    max_value=70,
+    value=52,
+    step=2,
+)
+
+st.caption(
+    "We simulate a pit stop on every future lap for this car and compare it to staying out. "
+    "Official Road America pit-lane transit is ~52s (excluding in/out-lap pace loss) — "
+    "adjust if race conditions differ."
+)
 
 future_laps = car_laps[car_laps["lap_number"] > lap]
 best_row = None
@@ -201,15 +211,20 @@ if best_row is not None:
     opt_lap = int(best_row["lap_number"])
     effect = float(best_row["pit_penalty_effect"])
     if effect < 0:
-        st.success(f"BEST PIT LAP → **Lap {opt_lap}** (gain: {abs(effect):.2f}s)")
+        st.success(
+            f"BEST PIT LAP → **Lap {opt_lap}** "
+            f"(projected gain: **{abs(effect):.2f}s** vs staying out)."
+        )
     else:
-        st.warning(f"Best compromise → **Lap {opt_lap}** (+{effect:.2f}s)")
+        st.warning(
+            f"Best compromise pit lap: **Lap {opt_lap}** "
+            f"(still adds ~**{effect:.2f}s** vs staying out)."
+        )
 else:
-    st.info("No sufficient future data.")
+    st.info("Not enough future laps available to compute an optimal pit window.")
 
 st.markdown('</div>', unsafe_allow_html=True)
 st.markdown("---")
-
 
 # ------------------------------------------------------------------
 # Lap-based strategy details (current lap) – Strategy A vs B
@@ -275,7 +290,7 @@ st.markdown('</div>', unsafe_allow_html=True)
 st.markdown("---")
 
 # ------------------------------------------------------------------
-# 🎯 Driver Coaching Insights (with text summary)
+# 🎯 Driver Coaching Insights (single unified block)
 # ------------------------------------------------------------------
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.subheader("🎯 Driver Coaching Insights")
@@ -286,7 +301,23 @@ completed = car_laps[car_laps["lap_number"] <= lap].copy().sort_values("lap_numb
 MIN_LAPS_FOR_COACHING = 4
 
 if len(completed) < MIN_LAPS_FOR_COACHING:
-    st.info("Not enough completed laps to generate coaching insights yet.")
+    # Early placeholder mode
+    st.info(
+        f"📊 Waiting for more data… (need **{MIN_LAPS_FOR_COACHING - len(completed)}** more laps)"
+    )
+    st.caption(
+        "💡 Tip: pace stabilizes around Lap 4 — the first laps mainly show tyre warm-up."
+    )
+
+    # Dynamic target pace when exactly 2 laps completed
+    if len(completed) == 2:
+        warmup_slope = completed["lap_time_s"].diff().iloc[-1]
+        projected_target = completed["lap_time_s"].iloc[-1] + (warmup_slope * -0.5)
+        st.warning(
+            f"🎯 Expected target pace by Lap 4: **~{projected_target:.2f}s** "
+            "based on warm-up trend."
+        )
+
 else:
     # Core statistics
     completed["rolling_3"] = completed["lap_time_s"].rolling(window=3, min_periods=1).mean()
@@ -320,7 +351,9 @@ else:
             "great pace improvement, keep this trend!"
         )
     else:
-        st.caption("Pace is close to your typical median – small refinements can still bring gains.")
+        st.caption(
+            "Pace is close to your typical median – small refinements can still bring gains."
+        )
 
     # --- Race phase stats for later summary & plot ---
     laps_arr = completed["lap_number"].values
@@ -417,7 +450,6 @@ else:
 
     # Phase strengths / weaknesses
     try:
-        # indices of min / max ignoring NaN
         strong_idx = int(np.nanargmin(phase_means))
         weak_idx = int(np.nanargmax(phase_means))
         strong_label = phase_labels[strong_idx]
@@ -434,7 +466,6 @@ else:
             f"Matching your best phase could unlock ~**{phase_delta:.2f}s** per lap there."
         )
     except (ValueError, TypeError):
-        # nanargmin/argmax can fail if all NaN; just skip this part
         pass
 
     # Slow laps info
