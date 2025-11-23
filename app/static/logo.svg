@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="60" viewBox="0 0 240 60">
+  <defs>
+    <linearGradient id="g" x1="0" x2="1">
+      <stop offset="0" stop-color="#ff7a18"/>
+      <stop offset="1" stop-color="#af002d"/>
+    </linearGradient>
+  </defs>
+  <rect width="240" height="60" rx="8" fill="#071428" />
+  <g fill="url(#g)">
+    <text x="16" y="36" font-family="Segoe UI, Roboto, Arial" font-size="20" font-weight="700">TRD</text>
+  </g>
+  <text x="70" y="36" fill="#e6eef8" font-family="Segoe UI, Roboto, Arial" font-size="14">Live Strategist</text>
+</svg>
