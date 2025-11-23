@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
@@ -7,7 +8,7 @@ from strategy_engine import (
     predict_next_lap,
     simulate_pit_effect,
     recommend_pit,
-    predict_finish_position,   # AI finish-position model
+    predict_finish_position,
 )
 
 # ------------------------------------------------------------------
@@ -64,13 +65,13 @@ st.markdown(
 )
 
 # ------------------------------------------------------------------
-# Paths (project + data directory)
+# Paths
 # ------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data_processed" / "road-america"
 
 # ------------------------------------------------------------------
-# Header with logo / title
+# Header
 # ------------------------------------------------------------------
 static_logo = Path(__file__).resolve().parent / "static" / "logo.svg"
 if static_logo.exists():
@@ -82,15 +83,11 @@ st.markdown("**AI-Powered Decision Support for Toyota GR Cup Racing**")
 st.markdown("---")
 
 # ------------------------------------------------------------------
-# Session selector (Race 1 / Race 2)
+# Session selector
 # ------------------------------------------------------------------
 session_label = st.selectbox("Select Race Session", ["Race 1", "Race 2"])
 
-file_map = {
-    "Race 1": "race1_race_state.csv",
-    "Race 2": "race2_race_state.csv",
-}
-
+file_map = {"Race 1": "race1_race_state.csv", "Race 2": "race2_race_state.csv"}
 session_file = DATA_DIR / file_map[session_label]
 
 if not session_file.exists():
@@ -101,69 +98,60 @@ if not session_file.exists():
 race_df = pd.read_csv(session_file)
 race_df["lap_number"] = race_df["lap_number"].astype(int)
 
-# Drop obviously broken rows for global stuff (e.g. field view)
+# Clean bad values
 race_df_clean = race_df[
     (race_df["lap_number"] > 0)
     & (race_df["lap_time_s"] > 40)
     & (race_df["lap_time_s"] < 400)
 ]
 
-# Reasonable maximum lap (ignore 32768 etc.)
 real_lap_cap = int(race_df_clean["lap_number"].max())
 
 st.caption(f"📂 Loaded dataset → Road America | {session_label}")
 st.markdown("---")
 
 # ------------------------------------------------------------------
-# Car & Lap Selection
+# Car selection
 # ------------------------------------------------------------------
 st.markdown('<div class="card">', unsafe_allow_html=True)
 cars = sorted(race_df["car_id"].unique())
 selected_car = st.selectbox("Select Car", cars)
 
-# ---- Load laps for the selected car ----
 car_laps = race_df[race_df["car_id"] == selected_car].copy()
-
-# ---- Data Cleaning Layer (per-car) ----
 car_laps = car_laps[
     (car_laps["lap_number"] > 0)
     & (car_laps["lap_number"] <= real_lap_cap)
     & (car_laps["lap_time_s"] > 40)
     & (car_laps["lap_time_s"] < 400)
-]
-car_laps = car_laps.sort_values("lap_number").reset_index(drop=True)
+].sort_values("lap_number")
 
-valid_laps = sorted(car_laps["lap_number"].unique().tolist())
-if not valid_laps:
-    st.error("No valid race laps found for this car.")
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.stop()
-
-default_lap = valid_laps[0]
-lap = st.select_slider("Select Lap", options=valid_laps, value=default_lap)
+valid_laps = sorted(car_laps["lap_number"].unique())
+lap = st.select_slider("Select Lap", options=valid_laps)
 
 row = car_laps[car_laps["lap_number"] == lap].iloc[0]
 max_laps = real_lap_cap
 
-st.markdown('</div>', unsafe_allow_html=True)
+# 🔧 FIX — Ensure these exist before they're used anywhere
+median_pace = float(row["median_pace"])
+gap_to_front = float(row["gap_to_front_s"])
+gap_to_leader = float(row["gap_to_leader_s"])
+pit_flag = bool(row["pit_like"])
 
+st.markdown('</div>', unsafe_allow_html=True)
 # ------------------------------------------------------------------
-# Current race context + predicted finish
+# Current race context
 # ------------------------------------------------------------------
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.subheader("📍 Current Race Context")
 
 c1, c2, c3, c4, c5 = st.columns(5)
-cur_pos = int(row["position"])
-
-c1.metric("Position", cur_pos)
+c1.metric("Position", int(row["position"]))
 c2.metric("Gap → Leader (s)", round(row["gap_to_leader_s"], 1))
 c3.metric("Gap → Front (s)", round(row["gap_to_front_s"], 1))
 c4.metric("Lap", int(row["lap_number"]))
 
-# Predicted finishing position (AI model)
+# Prediction
 predicted_text = "N/A"
-delta_text = None
 try:
     pred_pos = predict_finish_position(
         lap_number=int(row["lap_number"]),
@@ -171,41 +159,25 @@ try:
         gap_front=float(row["gap_to_front_s"]),
         gap_leader=float(row["gap_to_leader_s"]),
     )
-
-    if pred_pos is not None:
-        predicted_text = f"P{pred_pos}"
-        delta = cur_pos - pred_pos  # positive = gain spots
-        if delta > 0:
-            delta_text = f"+{delta} places (projected gain)"
-        elif delta < 0:
-            delta_text = f"{abs(delta)} places (projected loss)"
-        else:
-            delta_text = "Flat vs current"
-except Exception:
-    # If model fails for any reason, keep N/A
+    predicted_text = f"P{pred_pos}"
+except:
     pass
 
-c5.metric("Predicted Finish", predicted_text, delta=delta_text)
-
-median_pace = float(row["median_pace"])
-gap_to_front = float(row["gap_to_front_s"])
-pit_flag = bool(row["pit_like"])
-
+c5.metric("Predicted Finish", predicted_text)
 st.markdown('</div>', unsafe_allow_html=True)
 st.markdown("---")
 
 # ------------------------------------------------------------------
-# 🔥 Smart AI Strategy Recommendation (global best pit lap)
+# Strategy recommendation
 # ------------------------------------------------------------------
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.subheader("🔥 Smart AI Strategy Recommendation")
 
 pit_loss = st.slider("Assumed Pit Time Loss (seconds)", 20, 60, 30, step=2)
 
-# Compute best pit lap across *future* laps for this car
 future_laps = car_laps[car_laps["lap_number"] > lap]
-
 best_row = None
+
 if not future_laps.empty:
     sims = []
     for _, r in future_laps.iterrows():
@@ -224,23 +196,19 @@ if not future_laps.empty:
 if best_row is not None:
     opt_lap = int(best_row["lap_number"])
     effect = float(best_row["pit_penalty_effect"])
-
     if effect < 0:
-        st.success(
-            f"BEST PIT LAP → **Lap {opt_lap}** (projected gain: **{abs(effect):.2f}s** vs staying out)."
-        )
+        st.success(f"BEST PIT LAP → **Lap {opt_lap}** (gain: {abs(effect):.2f}s)")
     else:
-        st.warning(
-            f"Best compromise pit lap: **Lap {opt_lap}** (still adds ~**{effect:.2f}s** vs staying out)."
-        )
+        st.warning(f"Best compromise → **Lap {opt_lap}** (+{effect:.2f}s)")
 else:
-    st.info("Not enough future laps available to compute an optimal pit window.")
+    st.info("No sufficient future data.")
 
 st.markdown('</div>', unsafe_allow_html=True)
 st.markdown("---")
 
+
 # ------------------------------------------------------------------
-# Lap-based strategy details (current lap) + Strategy A vs B
+# Lap-based strategy details (current lap) – Strategy A vs B
 # ------------------------------------------------------------------
 sim = simulate_pit_effect(
     lap_number=lap,
@@ -254,25 +222,21 @@ rec = recommend_pit(sim)
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.subheader("📈 Lap-Based Strategy Details")
 
-# Strategy A vs B compare:
-#   Strategy A  -> Stay out
-#   Strategy B  -> Pit this lap
-strategy_compare_df = pd.DataFrame(
-    [
-        {
-            "Strategy": "A – Stay out",
-            "Next lap time (s)": sim["no_pit_next_lap_time"],
-            "Δ vs stay out (s)": 0.0,
-        },
-        {
-            "Strategy": "B – Pit this lap",
-            "Next lap time (s)": sim["pit_next_lap_time"],
-            "Δ vs stay out (s)": sim["pit_penalty_effect"],
-        },
-    ]
-)
-
-st.table(strategy_compare_df)
+base_time = sim["no_pit_next_lap_time"]
+strategy_rows = [
+    {
+        "Strategy": "A – Stay out",
+        "Next lap time (s)": base_time,
+        "Δ vs stay out (s)": 0.0,
+    },
+    {
+        "Strategy": "B – Pit this lap",
+        "Next lap time (s)": sim["pit_next_lap_time"],
+        "Δ vs stay out (s)": sim["pit_penalty_effect"],
+    },
+]
+sim_df = pd.DataFrame(strategy_rows)
+st.table(sim_df)
 
 st.markdown(f"📌 Recommendation → **{rec}**")
 st.markdown('</div>', unsafe_allow_html=True)
@@ -307,7 +271,204 @@ st.markdown('</div>', unsafe_allow_html=True)
 st.markdown("---")
 
 # ------------------------------------------------------------------
-# Lap time trend + pit visualization
+# 🎯 Driver Coaching Insights (with text summary)
+# ------------------------------------------------------------------
+st.markdown('<div class="card">', unsafe_allow_html=True)
+st.subheader("🎯 Driver Coaching Insights")
+
+# Use only laps completed up to the currently selected lap
+completed = car_laps[car_laps["lap_number"] <= lap].copy().sort_values("lap_number")
+
+MIN_LAPS_FOR_COACHING = 4
+
+if len(completed) < MIN_LAPS_FOR_COACHING:
+    st.info("Not enough completed laps to generate coaching insights yet.")
+else:
+    # Core statistics
+    completed["rolling_3"] = completed["lap_time_s"].rolling(window=3, min_periods=1).mean()
+    median_time = completed["lap_time_s"].median()
+    best_idx = completed["lap_time_s"].idxmin()
+    best_lap_no = int(completed.loc[best_idx, "lap_number"])
+    best_time = float(completed.loc[best_idx, "lap_time_s"])
+
+    # Delta vs median
+    completed["delta_vs_median"] = completed["lap_time_s"] - median_time
+    SLOW_THRESHOLD = 3.0  # seconds slower than median
+    completed["is_slow"] = completed["delta_vs_median"] > SLOW_THRESHOLD
+
+    # High-level coaching summary metrics
+    slow_count = int(completed["is_slow"].sum())
+    last_delta = float(completed.iloc[-1]["delta_vs_median"])
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Laps analyzed", len(completed))
+    c2.metric("Best lap so far", f"{best_time:.2f}s (Lap {best_lap_no})")
+    c3.metric("Slow laps (>+3s vs median)", slow_count)
+
+    if last_delta > SLOW_THRESHOLD:
+        st.warning(
+            f"Last completed lap was **{last_delta:.2f}s** slower than your median – "
+            f"possible mistake or traffic on lap {int(completed.iloc[-1]['lap_number'])}."
+        )
+    elif last_delta < -1.5:
+        st.success(
+            f"Last lap was **{abs(last_delta):.2f}s** faster than your median – "
+            "great pace improvement, keep this trend!"
+        )
+    else:
+        st.caption("Pace is close to your typical median – small refinements can still bring gains.")
+
+    # --- Race phase stats for later summary & plot ---
+    laps_arr = completed["lap_number"].values
+    times_arr = completed["lap_time_s"].values
+    indices = np.arange(len(completed))
+    phase_edges = np.array_split(indices, 3)
+
+    phase_labels = ["Early stint", "Middle stint", "Late stint"]
+    phase_means = []
+    for idxs in phase_edges:
+        if len(idxs) == 0:
+            phase_means.append(np.nan)
+        else:
+            phase_means.append(float(times_arr[idxs].mean()))
+
+    # --- Visualizations in tabs ---
+    tab1, tab2, tab3 = st.tabs(["Pace trace", "Lap deltas", "Race phases"])
+
+    # Tab 1: Pace trace (lap times + rolling average + best lap)
+    with tab1:
+        fig_pace, ax_pace = plt.subplots(figsize=(8, 3))
+        ax_pace.plot(
+            completed["lap_number"],
+            completed["lap_time_s"],
+            marker="o",
+            label="Lap time",
+        )
+        ax_pace.plot(
+            completed["lap_number"],
+            completed["rolling_3"],
+            linestyle="--",
+            marker=None,
+            label="Rolling pace (3-lap)",
+        )
+        ax_pace.axhline(
+            median_time,
+            linestyle=":",
+            label="Median pace",
+        )
+        ax_pace.scatter(
+            [best_lap_no],
+            [best_time],
+            s=90,
+            edgecolors="lime",
+            facecolors="none",
+            linewidths=2,
+            label="Best lap",
+        )
+        ax_pace.set_xlabel("Lap")
+        ax_pace.set_ylabel("Lap time (s)")
+        ax_pace.set_title(f"Pace Trace — {selected_car} ({session_label})")
+        ax_pace.grid(True)
+        ax_pace.legend()
+        st.pyplot(fig_pace)
+
+    # Tab 2: Lap deltas vs median (bar chart)
+    with tab2:
+        fig_delta, ax_delta = plt.subplots(figsize=(8, 3))
+        ax_delta.bar(
+            completed["lap_number"],
+            completed["delta_vs_median"],
+        )
+        ax_delta.axhline(0, linewidth=1)
+        ax_delta.set_xlabel("Lap")
+        ax_delta.set_ylabel("Δ time vs median (s)")
+        ax_delta.set_title("Lap Time Delta vs Median Pace")
+        ax_delta.grid(True, axis="y", linestyle="--", alpha=0.4)
+        st.pyplot(fig_delta)
+
+        st.caption(
+            "Bars above zero are slower-than-median laps (potential mistakes / traffic); "
+            "bars below zero are faster-than-median (strong laps)."
+        )
+
+    # Tab 3: Race phases (early / middle / late)
+    with tab3:
+        fig_phase, ax_phase = plt.subplots(figsize=(6, 3))
+        ax_phase.bar(phase_labels, phase_means)
+        ax_phase.set_ylabel("Average lap time (s)")
+        ax_phase.set_title("Pace by Race Phase")
+        ax_phase.grid(True, axis="y", linestyle="--", alpha=0.4)
+        st.pyplot(fig_phase)
+
+        st.caption(
+            "Use this to see if you tend to be stronger early (tyre warm-up), "
+            "mid-race, or late (tyre degradation / focus)."
+        )
+
+    # ---- Text coaching summary under the tabs ----
+    st.markdown("---")
+    st.markdown("**📝 Coaching summary**")
+
+    summary_lines = []
+
+    # Phase strengths / weaknesses
+    try:
+        # indices of min / max ignoring NaN
+        strong_idx = int(np.nanargmin(phase_means))
+        weak_idx = int(np.nanargmax(phase_means))
+        strong_label = phase_labels[strong_idx]
+        weak_label = phase_labels[weak_idx]
+        strong_mean = phase_means[strong_idx]
+        weak_mean = phase_means[weak_idx]
+        phase_delta = weak_mean - strong_mean
+
+        summary_lines.append(
+            f"- Strongest phase: **{strong_label}** (~{strong_mean:.2f}s avg)."
+        )
+        summary_lines.append(
+            f"- Weakest phase: **{weak_label}** (~{weak_mean:.2f}s). "
+            f"Matching your best phase could unlock ~**{phase_delta:.2f}s** per lap there."
+        )
+    except (ValueError, TypeError):
+        # nanargmin/argmax can fail if all NaN; just skip this part
+        pass
+
+    # Slow laps info
+    if slow_count > 0:
+        summary_lines.append(
+            f"- You had **{slow_count} slow lap(s)** (>+{SLOW_THRESHOLD:.0f}s vs median). "
+            "Review these for traffic, braking too deep, or missed apexes."
+        )
+    else:
+        summary_lines.append(
+            "- No major slow laps detected so far — consistency looks solid."
+        )
+
+    # Last lap commentary
+    if last_delta > SLOW_THRESHOLD:
+        summary_lines.append(
+            "- Last lap was significantly off your usual pace – consider a reset lap to cool tyres "
+            "and rebuild rhythm."
+        )
+    elif last_delta < -1.5:
+        summary_lines.append(
+            "- Last lap was one of your best relative to median – whatever you changed there is working, "
+            "try to repeat that reference."
+        )
+    else:
+        summary_lines.append(
+            "- Recent laps are close to your typical pace – push to trim **0.2–0.3s** by focusing on "
+            "one corner or braking zone at a time."
+        )
+
+    for line in summary_lines:
+        st.markdown(line)
+
+st.markdown('</div>', unsafe_allow_html=True)
+st.markdown("---")
+
+# ------------------------------------------------------------------
+# Lap time trend + pit visualization (overall)
 # ------------------------------------------------------------------
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.subheader("⏱ Lap Time Trend for Selected Car")
