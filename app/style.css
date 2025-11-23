@@ -1,0 +1,37 @@
+/* Page padding and clean spacing */
+.block-container {
+    padding-top: 2rem;
+}
+
+/* Beautiful dark UI effect */
+.css-1d391kg {
+    background-color: #0f0f0f !important;
+    border-radius: 12px;
+    padding: 18px;
+    box-shadow: 0px 0px 18px rgba(255, 0, 0, 0.09);
+}
+
+.stApp {
+    background: linear-gradient(180deg, #060d16, #0b1f33);
+    color: white;
+}
+
+div[data-testid="stMetricValue"] {
+    color: #FF2E2E !important;
+    font-weight: 900;
+}
+/* Elegant TRD UI */
+* {
+    font-family: "Inter", sans-serif;
+}
+
+.block-container {
+    padding-top: 1rem;
+}
+
+.css-1d391kg {
+    background-color: #111 !important;
+    border-radius: 14px;
+    padding: 20px;
+    box-shadow: 0px 0px 18px rgba(255, 0, 0, 0.15);
+}
