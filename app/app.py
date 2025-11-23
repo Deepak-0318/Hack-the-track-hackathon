@@ -126,7 +126,11 @@ car_laps = car_laps[
 ].sort_values("lap_number")
 
 valid_laps = sorted(car_laps["lap_number"].unique())
-lap = st.select_slider("Select Lap", options=valid_laps)
+if not valid_laps:
+    st.error("No valid race laps found for this car after cleaning.")
+    st.stop()
+
+lap = st.select_slider("Select Lap", options=valid_laps, value=valid_laps[0])
 
 row = car_laps[car_laps["lap_number"] == lap].iloc[0]
 max_laps = real_lap_cap
