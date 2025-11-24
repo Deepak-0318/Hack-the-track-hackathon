@@ -326,13 +326,13 @@ st.success(f"Optimal Pit Call Confidence: **{confidence}%**")
 
 # ------------------------------ AUDIO PIT CALL ------------------------------
 
-try:
-    import pyttsx3
-    if "tts_engine" not in st.session_state:
-        st.session_state.tts_engine = pyttsx3.init()
-    AUDIO = True
-except:
-    AUDIO = False
+# try:
+#     import pyttsx3
+#     if "tts_engine" not in st.session_state:
+#         st.session_state.tts_engine = pyttsx3.init()
+#     AUDIO = True
+# except:
+#     AUDIO = False
 
 if st.button("🎙️ Play Engineer Pit Call"):
     if AUDIO:
